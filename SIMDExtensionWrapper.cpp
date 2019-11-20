@@ -24,32 +24,20 @@ SOFTWARE.
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #ifdef _WIN32
 #define WINVER 0x0601 // Target Windows 7 as a Minimum Platform
 #define _WIN32_WINNT 0x0601
 #include <windows.h>
 #include <process.h>
-
+#include <io.h>
+#define close _close
+#define dup _dup
+#define dup2 _dup2
 #define execvp _execvp
-
-struct
-stat
-{
-    char tmp;
-};
-
-static
-int
-stat(char *name, struct stat *st)
-{
-    (void)st;
-    return(INVALID_FILE_ATTRIBUTES == GetFileAttributes(name) || GetLastError() == ERROR_FILE_NOT_FOUND);
-}
-
 #else
 #include <unistd.h>
-#include <sys/stat.h>
 #endif
 
 typedef uint32_t u32;
@@ -112,14 +100,14 @@ Status_Marco_Expression_Sponge = 0
 #define PrintError(message, ...) \
 { \
 stbsp_snprintf(Message_Buffer, 512, message, ##__VA_ARGS__); \
-fprintf(stderr, "%s", Message_Buffer); \
+fprintf(stderr, "%s\n", Message_Buffer); \
 } \
 Status_Marco_Expression_Sponge = 0
 
 #define PrintStatus(message, ...) \
 { \
 stbsp_snprintf(Message_Buffer, 512, message, ##__VA_ARGS__); \
-fprintf(stdout, "%s", Message_Buffer); \
+fprintf(stdout, "%s\n", Message_Buffer); \
 } \
 Status_Marco_Expression_Sponge = 0
 
@@ -136,6 +124,26 @@ entry
 MainArgs
 {
     (void)ArgCount;
+
+#ifdef _WIN32
+    u08 exeStrip = 0;
+    {
+        char buff[1024];
+        char *ptr = (char *)ArgBuffer[0];
+        u32 len = 1;
+        while (*++ptr) ++len;
+        if (len > 4 && *(ptr - 4) == '.' && *(ptr - 3) == 'e' && *(ptr - 2) == 'x' && *(ptr - 1) == 'e')
+        {
+            exeStrip = 1;
+            ForLoop((len - 4))
+            {
+                buff[index] = *(ArgBuffer[0] + index);
+            }
+            buff[len - 4] = 0;
+            ArgBuffer[0] = (const char *)buff;
+        }
+    }
+#endif
 
     u32 hasSSE41 = 0;
     u32 hasSSE42 = 0;
@@ -189,27 +197,40 @@ MainArgs
     char buffer[1024];
     char *prosessName = 0;
     char *ext = 0;
-    struct stat processStat;
     
+    s32 dupout = dup(1);
+    s32 duperr = dup(2);
+    close(1);
+    close(2);
     ForLoop(ArrayCount(entries))
     {
         entry *ent = entries + index;
         if (*(ent->extAvailable))
         {
             ext = ent->name;
+#ifdef _WIN32
+            if (exeStrip) stbsp_snprintf(buffer, sizeof(buffer), "%s.%s.exe", ArgBuffer[0], ent->extName);
+            else stbsp_snprintf(buffer, sizeof(buffer), "%s.%s", ArgBuffer[0], ent->extName);
+#else
             stbsp_snprintf(buffer, sizeof(buffer), "%s.%s", ArgBuffer[0], ent->extName);
-            if (!stat(buffer, &processStat))
+#endif       
+            if (!system(buffer))
             {
                 prosessName = (char *)buffer;
                 break;
             }
         }
     }
+    dup2(dupout, 1);
+    dup2(duperr, 2);
+    close(dupout);
+    close(duperr);
 
     if (prosessName)
     {
         PrintStatus("Running with %s CPU extensions", ext);
         ArgBuffer[0] = (const char *)prosessName;
+        
         execvp((const char *)prosessName, (char *const *)ArgBuffer);
         PrintError("Error executing process \'%s\'", prosessName);
         exit(errno);
